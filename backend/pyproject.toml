@@ -1,7 +1,7 @@
 [project]
 name = "backend"
 version = "0.1.0"
-description = "Add your description here"
+description = "RoofScan AI - Roof damage detection backend"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.121.1",
@@ -13,3 +13,7 @@ dependencies = [
     "roboflow>=1.2.11",
     "uvicorn>=0.38.0",
 ]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
