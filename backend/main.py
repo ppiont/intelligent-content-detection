@@ -21,18 +21,23 @@ from services.report_generator import report_generator
 # Initialize FastAPI app
 app = FastAPI(title="RoofScan AI API")
 
-# Enable CORS for local React dev server
+# Enable CORS for local React dev server and production
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:3000",
+        "https://wonderful-gratitude-production.up.railway.app"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Setup directories
-UPLOAD_DIR = Path("../uploads")
-OUTPUT_DIR = Path("../outputs")
+# Setup directories - use absolute paths for production
+UPLOAD_DIR = Path("uploads").absolute()
+OUTPUT_DIR = Path("outputs").absolute()
 UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
