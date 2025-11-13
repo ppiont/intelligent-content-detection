@@ -1,7 +1,11 @@
 import os
+import logging
 from pathlib import Path
 from typing import List, Dict, Any
 from inference_sdk import InferenceHTTPClient
+import tenacity
+
+logger = logging.getLogger(__name__)
 
 
 class RoboflowVisionService:
@@ -10,8 +14,8 @@ class RoboflowVisionService:
     def __init__(self):
         self.api_key = os.getenv("ROBOFLOW_API_KEY") or "not-set"
 
-        # Your custom YOLOv11 model ID
-        self.model_id = "roof-dmg-a1b1a/3"
+        # Your custom YOLOv11 model ID (configurable via environment)
+        self.model_id = os.getenv("ROBOFLOW_MODEL_ID", "roof-dmg-a1b1a/3")
 
         # Initialize the client - use detect.roboflow.com for hosted models
         self.client = InferenceHTTPClient(
@@ -19,12 +23,20 @@ class RoboflowVisionService:
             api_key=self.api_key
         )
 
-        # Default confidence threshold (0-100 scale)
-        self.confidence = 40
+        # Default confidence threshold (0-100 scale, configurable via environment)
+        self.confidence = int(os.getenv("ROBOFLOW_CONFIDENCE", "40"))
 
+    @tenacity.retry(
+        stop=tenacity.stop_after_attempt(3),
+        wait=tenacity.wait_exponential(multiplier=1, min=2, max=10),
+        retry=tenacity.retry_if_exception_type((Exception,)),
+        before_sleep=tenacity.before_sleep_log(logger, logging.WARNING)
+    )
     def detect_damage(self, image_path: Path) -> Dict[str, Any]:
         """
         Detect roof damage in an image using Roboflow Inference SDK.
+
+        Includes automatic retry logic with exponential backoff for robustness.
 
         Args:
             image_path: Path to the image file
@@ -32,7 +44,7 @@ class RoboflowVisionService:
         Returns:
             Dict with damages array and summary statistics
         """
-        print(f"[DEBUG] Running Roboflow YOLOv11 inference on: {image_path}")
+        logger.info(f"Running Roboflow YOLOv11 inference on: {image_path}")
 
         # Check if API key is set
         if self.api_key == "not-set":
@@ -47,7 +59,7 @@ class RoboflowVisionService:
             model_id=self.model_id
         )
 
-        print(f"[DEBUG] Roboflow raw result: {result}")
+        logger.debug(f"Roboflow raw result: {result}")
 
         # Parse predictions
         predictions = result.get("predictions", [])
@@ -62,8 +74,8 @@ class RoboflowVisionService:
             image_width = result.get("width", 0)
             image_height = result.get("height", 0)
 
-        print(f"[DEBUG] Image dimensions: {image_width}x{image_height}")
-        print(f"[DEBUG] Found {len(predictions)} predictions")
+        logger.debug(f"Image dimensions: {image_width}x{image_height}")
+        logger.info(f"Found {len(predictions)} damage predictions")
 
         for pred in predictions:
             # Roboflow returns:
@@ -106,11 +118,11 @@ class RoboflowVisionService:
                 "severity": severity,
                 "bbox": bbox_percent,
                 "confidence": confidence,
-                "description": f"{detected_class} detected by Roboflow model",
+                "description": f"Roof damage detected (area: {bbox_percent[2]-bbox_percent[0]:.1f}% x {bbox_percent[3]-bbox_percent[1]:.1f}%)",
             }
 
             damages.append(damage)
-            print(f"[DEBUG] Damage: {damage}")
+            logger.debug(f"Processed damage: {damage}")
 
         # Generate summary
         summary = self._generate_summary(damages)
@@ -135,14 +147,14 @@ class RoboflowVisionService:
         else:
             area = 0
 
-        # Use confidence and size to determine initial severity
-        # High confidence + large area = more severe
-        if confidence > 0.8 and area > 10:  # Large damage with high confidence
+        # Use confidence and size to determine initial severity (conservative approach)
+        # Be very strict about "severe" - require both high confidence AND very large area
+        if confidence > 0.9 and area > 20:  # Only classify as severe for massive, high-confidence damage
             return "severe"
-        elif confidence > 0.6 and area > 5:  # Medium damage
+        elif confidence > 0.75 and area > 12:  # Moderate for larger damage areas
             return "moderate"
         else:
-            return "minor"
+            return "minor"  # Default to minor for most cases
 
     def _map_class_to_type(self, roboflow_class: str) -> str:
         """

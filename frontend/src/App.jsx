@@ -29,7 +29,6 @@ function App() {
           const errorData = await response.json();
           errorMessage = errorData.detail || errorMessage;
         } catch (jsonErr) {
-          // If JSON parsing fails, try to get text
           try {
             const errorText = await response.text();
             errorMessage = errorText || `Server error (${response.status})`;
