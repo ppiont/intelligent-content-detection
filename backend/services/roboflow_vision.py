@@ -1,27 +1,30 @@
 import os
-import base64
-import requests
 from pathlib import Path
 from typing import List, Dict, Any
+from inference_sdk import InferenceHTTPClient
 
 
 class RoboflowVisionService:
-    """Service for detecting roof damage using Roboflow Inference API."""
+    """Service for detecting roof damage using Roboflow Inference SDK."""
 
     def __init__(self):
         self.api_key = os.getenv("ROBOFLOW_API_KEY") or "not-set"
 
-        # Roboflow Inference API endpoint
-        # Using the public model: shingle-roof-inspection/damaged-shingle-obj-detection
-        self.api_url = "https://detect.roboflow.com/damaged-shingle-obj-detection/1"
+        # Your custom YOLOv11 model ID
+        self.model_id = "roof-dmg-a1b1a/3"
 
-        # Default confidence and overlap thresholds
+        # Initialize the client - use detect.roboflow.com for hosted models
+        self.client = InferenceHTTPClient(
+            api_url="https://detect.roboflow.com",
+            api_key=self.api_key
+        )
+
+        # Default confidence threshold (0-100 scale)
         self.confidence = 40
-        self.overlap = 30
 
     def detect_damage(self, image_path: Path) -> Dict[str, Any]:
         """
-        Detect roof damage in an image using Roboflow Inference API.
+        Detect roof damage in an image using Roboflow Inference SDK.
 
         Args:
             image_path: Path to the image file
@@ -29,39 +32,35 @@ class RoboflowVisionService:
         Returns:
             Dict with damages array and summary statistics
         """
-        print(f"[DEBUG] Running Roboflow inference on: {image_path}")
+        print(f"[DEBUG] Running Roboflow YOLOv11 inference on: {image_path}")
 
-        # Read and encode image to base64
-        with open(image_path, "rb") as image_file:
-            image_data = base64.b64encode(image_file.read()).decode("utf-8")
+        # Check if API key is set
+        if self.api_key == "not-set":
+            raise Exception(
+                "ROBOFLOW_API_KEY not set. Please add your Roboflow API key to backend/.env file. "
+                "Get your key from: https://app.roboflow.com/settings/api"
+            )
 
-        # Make API request
-        params = {
-            "api_key": self.api_key,
-            "confidence": self.confidence,
-            "overlap": self.overlap,
-        }
-
-        response = requests.post(
-            self.api_url,
-            params=params,
-            data=image_data,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        # Run inference using the SDK
+        result = self.client.infer(
+            str(image_path),
+            model_id=self.model_id
         )
 
-        if response.status_code != 200:
-            raise RuntimeError(f"Roboflow API error: {response.status_code} - {response.text}")
-
-        result = response.json()
         print(f"[DEBUG] Roboflow raw result: {result}")
 
         # Parse predictions
         predictions = result.get("predictions", [])
         damages = []
 
-        # Get image dimensions from result
+        # Get image dimensions from result (Roboflow SDK returns these at top level)
         image_width = result.get("image", {}).get("width", 0)
         image_height = result.get("image", {}).get("height", 0)
+
+        # Fallback: if not in 'image' dict, check top level
+        if image_width == 0 or image_height == 0:
+            image_width = result.get("width", 0)
+            image_height = result.get("height", 0)
 
         print(f"[DEBUG] Image dimensions: {image_width}x{image_height}")
         print(f"[DEBUG] Found {len(predictions)} predictions")
@@ -98,8 +97,8 @@ class RoboflowVisionService:
             detected_class = pred.get("class", "unknown")
             confidence = pred.get("confidence", 0.0)
 
-            # Map Roboflow classes to our severity system
-            severity = self._map_class_to_severity(detected_class)
+            # Map Roboflow classes to our severity system (using confidence and bbox size)
+            severity = self._map_class_to_severity(detected_class, confidence, bbox_percent)
             damage_type = self._map_class_to_type(detected_class)
 
             damage = {
@@ -121,33 +120,40 @@ class RoboflowVisionService:
             "summary": summary,
         }
 
-    def _map_class_to_severity(self, roboflow_class: str) -> str:
+    def _map_class_to_severity(self, roboflow_class: str, confidence: float, bbox: List[float]) -> str:
         """
-        Map Roboflow class names to severity levels.
+        Map Roboflow class names to severity levels based on confidence and size.
 
-        Roboflow model classes: "Damaged", "Not Damaged", "Obvious Damage"
+        For models with a single "damage" class, we use confidence and bbox size
+        to determine severity. The LLM will refine this further in hybrid mode.
         """
-        roboflow_class_lower = roboflow_class.lower()
+        # Calculate bounding box area (as percentage of image)
+        if len(bbox) == 4:
+            width = abs(bbox[2] - bbox[0])
+            height = abs(bbox[3] - bbox[1])
+            area = width * height
+        else:
+            area = 0
 
-        if "obvious" in roboflow_class_lower:
+        # Use confidence and size to determine initial severity
+        # High confidence + large area = more severe
+        if confidence > 0.8 and area > 10:  # Large damage with high confidence
             return "severe"
-        elif "damaged" in roboflow_class_lower and "not" not in roboflow_class_lower:
+        elif confidence > 0.6 and area > 5:  # Medium damage
             return "moderate"
         else:
             return "minor"
 
     def _map_class_to_type(self, roboflow_class: str) -> str:
-        """Map Roboflow class to damage type."""
-        roboflow_class_lower = roboflow_class.lower()
+        """
+        Map Roboflow class to damage type.
 
-        # The Roboflow model detects shingle damage generically
-        # We'll categorize based on severity indicator
-        if "obvious" in roboflow_class_lower:
-            return "missing_shingles"
-        elif "damaged" in roboflow_class_lower:
-            return "damaged_shingles"
-        else:
-            return "wear"
+        For single "damage" class models, return generic roof_damage.
+        The LLM will refine this to specific types in hybrid mode.
+        """
+        # For single-class models, use generic type
+        # The hybrid LLM will provide more specific classification
+        return "roof_damage"
 
     def _generate_summary(self, damages: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Generate summary statistics from damages."""

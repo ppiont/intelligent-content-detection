@@ -15,6 +15,7 @@ from pydantic import BaseModel
 load_dotenv()
 
 from services.vision import vision_service
+from services.hybrid_vision import hybrid_vision_service
 from services.image_processor import image_processor
 from services.report_generator import report_generator
 
@@ -126,8 +127,17 @@ async def analyze_roof(file: UploadFile = File(...)):
         f.write(content)
 
     try:
-        # Call OpenAI GPT-4o Vision for damage detection
-        detection_result = await vision_service.detect_damage(original_path)
+        # Use hybrid approach: YOLOv11 for detection + GPT-4o for reasoning
+        # Set USE_HYBRID=false in .env to fall back to pure OpenAI vision
+        use_hybrid = os.getenv("USE_HYBRID", "true").lower() == "true"
+
+        if use_hybrid:
+            print("[INFO] Using hybrid vision (YOLO + LLM)")
+            detection_result = await hybrid_vision_service.detect_damage(original_path)
+        else:
+            print("[INFO] Using pure OpenAI vision")
+            detection_result = await vision_service.detect_damage(original_path)
+
         damages = detection_result.get("damages", [])
 
         # Generate annotated image with bounding boxes

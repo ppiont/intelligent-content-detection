@@ -57,12 +57,8 @@ export default function Results({ data, onReset, onGenerateReport }) {
         </div>
       </div>
 
-      {/* Image Comparison */}
-      <div className="images-grid">
-        <div className="image-panel">
-          <h3>Original Image</h3>
-          <img src={original_image_url} alt="Original roof" />
-        </div>
+      {/* Annotated Image */}
+      <div className="annotated-image-container">
         <div className="image-panel">
           <h3>Detected Damage</h3>
           <img src={annotated_image_url} alt="Annotated roof with damage" />
